@@ -3,13 +3,6 @@
 
 static LPTSTR convertAnsi(const char* input) {
 #ifdef UNICODE
-    /*
-     *  if( str.empty() ) return std::wstring();
-    int size_needed = MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), NULL, 0);
-    std::wstring wstrTo( size_needed, 0 );
-    MultiByteToWideChar                  (CP_UTF8, 0, &str[0], (int)str.size(), &wstrTo[0], size_needed);
-    return wstrTo;
-     */
     int size = MultiByteToWideChar(CP_UTF8, 0, input, -1, NULL, 0);
     LPTSTR output = calloc(size, sizeof(*output));
     MultiByteToWideChar(CP_UTF8, 0, input, -1, output, size);
@@ -50,32 +43,6 @@ static LPTSTR convertArgs(int count, char** values) {
     return converted;
 }
 
-typedef struct {
-    TCHAR dll[4096];
-    LPVOID hookyArgs;
-} InjectedArguments;
-
-typedef DWORD (* HookyType)(LPVOID rawArgs);
-
-DWORD WINAPI injectedFunction(LPVOID rawArgs) {
-    InjectedArguments* args = (InjectedArguments*) rawArgs;
-
-    HANDLE dllHandle = LoadLibrary(args->dll);
-    if(dllHandle == NULL) {
-        return 1;
-    }
-
-    HookyType hooky = (HookyType) GetProcAddress(dllHandle, "hooky");
-    if(hooky == NULL) {
-        CloseHandle(dllHandle);
-        return 2;
-    }
-
-    return hooky(args->hookyArgs);
-}
-
-void WINAPI injectedFunctionEnd(void) {}
-
 static void die(HANDLE handle) {
     if(handle != NULL) {
         TerminateProcess(handle, 1);
@@ -115,30 +82,14 @@ static LPVOID injectMemory(HANDLE process, const void* buffer, size_t size, int 
     return remoteBuffer;
 }
 
-static void getDllPath(LPTSTR buffer, size_t bufferLength) {
-    int size = GetCurrentDirectory(0, NULL);
-    size += 1 + 16;
-    if(bufferLength < size) {
-        printf("Buffer was too small\n");
-        abort();
-    }
-
-    GetCurrentDirectory(size, buffer);
-    lstrcat(buffer, TEXT("\\libDuelShim.dll"));
-}
-
 int main(int argc, char** argv) {
-    if(argc < 2) {
+    if(argc < 3) {
+        printf("Usage: %s (dll) (game) [args...]\n", argc == 0 ? "DuelShimLauncher.exe" : argv[0]);
         return 1;
     }
 
-    Sleep(30 * 1000);
-    if(1) {
-        return 0;
-    }
-
-    LPTSTR target = convertAnsi(argv[1]);
-    LPTSTR args = convertArgs(argc - 2, &argv[2]);
+    LPTSTR target = convertAnsi(argv[2]);
+    LPTSTR args = convertArgs(argc - 3, &argv[3]);
 
     STARTUPINFO startupInfo = {0};
     startupInfo.cb = sizeof(startupInfo);
@@ -152,7 +103,7 @@ int main(int argc, char** argv) {
         NULL,
         NULL,
         FALSE,
-        0/*CREATE_SUSPENDED*/,
+        CREATE_SUSPENDED,
         NULL,
         NULL,
         &startupInfo,
@@ -163,7 +114,7 @@ int main(int argc, char** argv) {
     if(!result) die(NULL);
 
     printf("Injecting dll...\n");
-    LPTSTR dllPath = TEXT("C:\\Users\\gudenau\\CLionProjects\\DuelShim\\cmake-build-debug\\libDuelShim.dll");
+    LPTSTR dllPath = convertAnsi(argv[1]);
     size_t dllPathLength = (lstrlen(dllPath) + 1) * sizeof(*dllPath);
     LPVOID argBuffer = injectMemory(processInfo.hProcess, dllPath, dllPathLength, PAGE_READONLY);
 #ifdef UNICODE
@@ -188,9 +139,7 @@ int main(int argc, char** argv) {
 
     WaitForSingleObject(remoteThread, INFINITE);
 
-    //VirtualFreeEx(processInfo.hProcess, argBuffer, (dllPathLength + 0x2000) & ~0x1FFF, MEM_RELEASE);
-
-    Sleep(20);
+    VirtualFreeEx(processInfo.hProcess, argBuffer, (dllPathLength + 0x2000) & ~0x1FFF, MEM_RELEASE);
 
     DWORD exitCode;
     GetExitCodeThread(remoteThread, &exitCode);
